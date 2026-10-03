@@ -9,7 +9,7 @@
 Presets (event IDs): see PRESETS below. Read-only: it never modifies the log.
 Work on a copy of the evidence. Field names come from the event's own EventData.
 """
-import argparse, csv, sys
+import argparse, csv, os, sys
 import xml.etree.ElementTree as ET
 
 NS = {"e": "http://schemas.microsoft.com/win/2004/08/events/event"}
@@ -56,14 +56,17 @@ def parse_event(xml_text):
 
 def summarize(rec):
     d = rec["data"]
-    keys = ["TargetUserName", "SubjectUserName", "IpAddress", "WorkstationName", "LogonType", "ServiceName",
+    keys = ["TargetUserName", "SubjectUserName", "IpAddress", "WorkstationName", "LogonType", "Status", "SubStatus", "ServiceName",
             "ImagePath", "TaskName", "NewProcessName", "CommandLine", "ParentProcessName", "ScriptBlockText",
             "MemberName", "TargetDomainName"]
     bits = [f"{k}={d[k][:120]}" for k in keys if d.get(k)]
     return "; ".join(bits)
 
 def iter_events(path):
-    from Evtx.Evtx import Evtx
+    try:
+        from Evtx.Evtx import Evtx
+    except ImportError:
+        sys.exit("python-evtx is not installed. Run:  pip install python-evtx")
     with Evtx(path) as log:
         for record in log.records():
             try:
@@ -91,6 +94,10 @@ def main():
     if a.ids:
         for x in a.ids.split(","): ids.setdefault(int(x), "")
     if not ids: ap.error("give --preset or --ids")
+    missing = [p for p in a.evtx if not os.path.isfile(p)]
+    if missing:
+        sys.exit("File not found: " + ", ".join(missing) +
+                 "\nExport a log first (run as Administrator):  wevtutil epl Security Security.evtx")
     rows, n = [], 0
     for path in a.evtx:
         for r in select(iter_events(path), ids, a.since):
