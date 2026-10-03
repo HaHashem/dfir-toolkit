@@ -5,6 +5,7 @@
   python scripts/evtx_triage.py Security.evtx --preset logons
   python scripts/evtx_triage.py System.evtx --ids 7045,7036 --csv services.csv
   python scripts/evtx_triage.py Security.evtx --preset ransomware --since 2026-10-01
+  python scripts/evtx_triage.py Security.evtx --all --csv everything.csv
 
 Presets (event IDs): see PRESETS below. Read-only: it never modifies the log.
 Work on a copy of the evidence. Field names come from the event's own EventData.
@@ -74,9 +75,12 @@ def iter_events(path):
             except Exception:
                 continue
 
+MEANINGS = {k: v for preset in PRESETS.values() for k, v in preset.items()}
+
 def select(events, ids, since=None):
+    """ids=None means keep every event."""
     for r in events:
-        if r is None or r["event_id"] not in ids: continue
+        if r is None or (ids is not None and r["event_id"] not in ids): continue
         if since and r["time"] and r["time"][:10] < since: continue
         yield r
 
@@ -84,7 +88,8 @@ def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("evtx", nargs="+")
     ap.add_argument("--preset", choices=sorted(PRESETS))
-    ap.add_argument("--ids", help="comma separated event IDs")
+    ap.add_argument("--ids", help="comma separated event IDs, for example 4624,4625")
+    ap.add_argument("--all", action="store_true", help="keep every event (combine with --since or --limit on big logs)")
     ap.add_argument("--since", help="YYYY-MM-DD, keep events on or after this date")
     ap.add_argument("--csv", help="write results to CSV")
     ap.add_argument("--limit", type=int, default=0, help="stop after N matches (0 = all)")
@@ -92,8 +97,15 @@ def main():
     ids = {}
     if a.preset: ids.update(PRESETS[a.preset])
     if a.ids:
-        for x in a.ids.split(","): ids.setdefault(int(x), "")
-    if not ids: ap.error("give --preset or --ids")
+        for x in a.ids.split(","):
+            x = x.strip()
+            if x.lower() in ("all", "*"): a.all = True; continue
+            try: ids.setdefault(int(x), MEANINGS.get(int(x), ""))
+            except ValueError: ap.error(f"--ids needs numbers like 4624,4625 (got '{x}'). For everything use --all")
+    if not ids and not a.all: ap.error("give --preset, --ids or --all")
+    if a.all: ids = None
+    if a.csv and a.csv.lower().endswith((".xlsx", ".xls")):
+        ap.error("--csv writes a plain CSV. Name it something.csv (Excel opens it fine)")
     missing = [p for p in a.evtx if not os.path.isfile(p)]
     if missing:
         sys.exit("File not found: " + ", ".join(missing) +
@@ -101,7 +113,7 @@ def main():
     rows, n = [], 0
     for path in a.evtx:
         for r in select(iter_events(path), ids, a.since):
-            rows.append({"file": path, "time": r["time"], "event_id": r["event_id"], "meaning": ids.get(r["event_id"], ""),
+            rows.append({"file": path, "time": r["time"], "event_id": r["event_id"], "meaning": MEANINGS.get(r["event_id"], ""),
                          "computer": r["computer"], "summary": summarize(r)})
             n += 1
             if a.limit and n >= a.limit: break
